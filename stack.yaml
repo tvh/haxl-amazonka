@@ -6,4 +6,5 @@ packages:
 extra-deps:
 - amazonka-1.3.5
 - amazonka-core-1.3.5
+- amazonka-s3-1.3.5
 - haxl-0.3.0.0
