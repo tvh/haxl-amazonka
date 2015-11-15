@@ -1,16 +1,19 @@
 {-# LANGUAGE GADTs, FlexibleInstances, MultiParamTypeClasses, OverloadedStrings, TypeFamilies, FlexibleContexts #-}
+{-# OPTIONS_GHC -Wall #-}
 module Network.AWS.DataSource where
 
+import Control.Concurrent.Async
+import Control.Exception as E
+import Control.Monad
+import Control.Monad.IO.Class
+import Data.Conduit
+import Data.Conduit.List
 import Data.Hashable
 import Data.Maybe
-import Control.Monad.IO.Class
-import Control.Monad
 import Data.Monoid
 import Data.Typeable
-import Network.AWS as AWS
 import Haxl.Core as Haxl
-import Control.Concurrent.Async
-import GHC.Generics
+import Network.AWS as AWS
 
 data AWSReq res where
     AWSReq
@@ -20,20 +23,34 @@ data AWSReq res where
            , Eq req
            )
         => req -> AWSReq (Rs req)
+    AWSReqAll
+        :: ( AWSPager req
+           , Show req
+           , Typeable req
+           , Eq req
+           )
+        => req -> AWSReq [(Rs req)]
   deriving (Typeable)
 
 instance Eq (AWSReq res) where
-    AWSReq req1 == AWSReq req2 =
-        let m_eq = do
-                req2' <- cast req2
-                return $ req1 == req2'
-        in fromMaybe False m_eq
+    r1 == r2 = case (r1, r2) of
+        (AWSReq r1', AWSReq r2') -> typedEQ r1' r2'
+        (AWSReqAll r1', AWSReqAll r2') -> typedEQ r1' r2'
+        _ -> False
+      where
+        typedEQ r1' r2' =
+            let m_eq = do
+                    r2'' <- cast r2'
+                    Just $ r1' == r2''
+            in fromMaybe False m_eq
 
 instance Show (AWSReq res) where
     show (AWSReq req) = "(AWSReq " <> show req <> ")"
+    show (AWSReqAll req) = "(AWSReqAll " <> show req <> ")"
 
 instance Hashable (AWSReq res) where
-    hashWithSalt salt (AWSReq req) = hashWithSalt salt (show req, typeOf req)
+    hashWithSalt salt (AWSReq req) = hashWithSalt salt (0::Int, show req, typeOf req)
+    hashWithSalt salt (AWSReqAll req) = hashWithSalt salt (1::Int, show req, typeOf req)
 
 instance DataSourceName AWSReq where
     dataSourceName _ = "AWS"
@@ -45,14 +62,20 @@ instance StateKey AWSReq where
     data State AWSReq = AWSState AWS.Env
 
 instance DataSource u AWSReq where
-    fetch (AWSState env) _ _ blocked_fetches = SyncFetch $ do
-        runResourceT . runAWS env . forM_ blocked_fetches $ \blocked_fetch -> do
-            () <- case blocked_fetch of
-                BlockedFetch (AWSReq request) result ->
-                    liftIO . putSuccess result =<< send request
-            return ()
+    fetch (AWSState aws_env) _ _ blocked_fetches = SyncFetch $ do
+        reqs <- forM blocked_fetches $ \(BlockedFetch aws_req result) ->
+            async $ do
+                res <- E.try $ runResourceT $ runAWS aws_env $ case aws_req of
+                    AWSReq req -> send req
+                    AWSReqAll req -> paginate req $$ consume
+                liftIO $ putResult result res
+        forM_ (reqs :: [Async ()]) link
+        forM_ reqs wait
 
-sendHaxl
+-- | Sends an 'AWSRequest'.
+--
+-- The result will be cached. This should only be used for read-only access.
+fetchAWS
     :: ( AWSRequest a
        , Show a
        , Typeable a
@@ -60,4 +83,39 @@ sendHaxl
        , Haxl.Request AWSReq (Rs a)
        )
     => a -> GenHaxl u (Rs a)
-sendHaxl req = dataFetch (AWSReq req)
+fetchAWS req = dataFetch (AWSReq req)
+
+-- | Uncached version of 'fetchAWS'
+uncachedFetchAWS
+    :: ( AWSRequest a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq (Rs a)
+       )
+    => a -> GenHaxl u (Rs a)
+uncachedFetchAWS req = uncachedRequest (AWSReq req)
+
+-- | Sends requests necessary to fetch all result pages of a 'AWSRequest'
+--
+-- The result will be cached. This should only be used for read-only access.
+fetchAllAWS
+    :: ( AWSPager a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq [(Rs a)]
+       )
+    => a -> GenHaxl u [(Rs a)]
+fetchAllAWS req = dataFetch (AWSReqAll req)
+
+-- | Uncached version of 'fetchAllAWS'
+uncachedFetchAllAWS
+    :: ( AWSPager a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq [(Rs a)]
+       )
+    => a -> GenHaxl u [(Rs a)]
+uncachedFetchAllAWS req = uncachedRequest (AWSReqAll req)
