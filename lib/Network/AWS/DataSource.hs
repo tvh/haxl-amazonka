@@ -42,7 +42,6 @@ data AWSReq res where
            , Eq req
            )
         => req -> AWSReq [(Rs req)]
-  deriving (Typeable)
 
 deriving instance Show (AWSReq res)
 
