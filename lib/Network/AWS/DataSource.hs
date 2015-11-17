@@ -1,19 +1,31 @@
-{-# LANGUAGE GADTs, FlexibleInstances, MultiParamTypeClasses, OverloadedStrings, TypeFamilies, FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE TypeFamilies          #-}
 {-# OPTIONS_GHC -Wall #-}
-module Network.AWS.DataSource where
+module Network.AWS.DataSource (
+    AWSReq(..),
+    initGlobalState,
+    fetchAWS,
+    uncachedFetchAWS,
+    fetchAllAWS,
+    uncachedFetchAllAWS,
+) where
 
-import Control.Concurrent.Async
-import Control.Exception as E
-import Control.Monad
-import Control.Monad.IO.Class
-import Data.Conduit
-import Data.Conduit.List
-import Data.Hashable
-import Data.Maybe
-import Data.Monoid
-import Data.Typeable
-import Haxl.Core as Haxl
-import Network.AWS as AWS
+import           Control.Concurrent.Async
+import           Control.Exception        as E
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           Data.Conduit
+import           Data.Conduit.List
+import           Data.Hashable
+import           Data.Maybe
+import           Data.Monoid
+import           Data.Typeable
+import           Haxl.Core                as Haxl
+import           Network.AWS              as AWS
 
 data AWSReq res where
     AWSReq
@@ -62,7 +74,7 @@ instance StateKey AWSReq where
     data State AWSReq = AWSState AWS.Env
 
 instance DataSource u AWSReq where
-    fetch (AWSState aws_env) _ _ blocked_fetches = SyncFetch $ do
+    fetch (AWSState aws_env) _ _ blocked_fetches = AsyncFetch $ \inner -> do
         reqs <- forM blocked_fetches $ \(BlockedFetch aws_req result) ->
             async $ do
                 res <- E.try $ runResourceT $ runAWS aws_env $ case aws_req of
@@ -70,7 +82,12 @@ instance DataSource u AWSReq where
                     AWSReqAll req -> paginate req $$ consume
                 liftIO $ putResult result res
         forM_ (reqs :: [Async ()]) link
+        inner
         forM_ reqs wait
+
+-- | Construct a global state to use in Haxl.
+initGlobalState :: AWS.Env -> State AWSReq
+initGlobalState aws_env = AWSState aws_env
 
 -- | Sends an 'AWSRequest'.
 --
