@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# OPTIONS_GHC -Wall #-}
 module Network.AWS.DataSource (
@@ -22,7 +23,6 @@ import           Data.Conduit
 import           Data.Conduit.List
 import           Data.Hashable
 import           Data.Maybe
-import           Data.Monoid
 import           Data.Typeable
 import           Haxl.Core                as Haxl
 import           Network.AWS              as AWS
@@ -44,6 +44,8 @@ data AWSReq res where
         => req -> AWSReq [(Rs req)]
   deriving (Typeable)
 
+deriving instance Show (AWSReq res)
+
 instance Eq (AWSReq res) where
     r1 == r2 = case (r1, r2) of
         (AWSReq r1', AWSReq r2') -> typedEQ r1' r2'
@@ -56,12 +58,8 @@ instance Eq (AWSReq res) where
                     Just $ r1' == r2''
             in fromMaybe False m_eq
 
-instance Show (AWSReq res) where
-    show (AWSReq req) = "(AWSReq " <> show req <> ")"
-    show (AWSReqAll req) = "(AWSReqAll " <> show req <> ")"
-
 instance Hashable (AWSReq res) where
-    hashWithSalt salt (AWSReq req) = hashWithSalt salt (0::Int, show req, typeOf req)
+    hashWithSalt salt (AWSReq req)    = hashWithSalt salt (0::Int, show req, typeOf req)
     hashWithSalt salt (AWSReqAll req) = hashWithSalt salt (1::Int, show req, typeOf req)
 
 instance DataSourceName AWSReq where
