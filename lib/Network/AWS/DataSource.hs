@@ -13,6 +13,10 @@ module Network.AWS.DataSource (
     uncachedFetchAWS,
     fetchAllAWS,
     uncachedFetchAllAWS,
+    fetchAWSIn,
+    uncachedFetchAWSIn,
+    fetchAllAWSIn,
+    uncachedFetchAllAWSIn,
 ) where
 
 import           Control.Concurrent.Async
@@ -34,21 +38,21 @@ data AWSReq res where
            , Typeable req
            , Eq req
            )
-        => req -> AWSReq (Rs req)
+        => Maybe Region -> req -> AWSReq (Rs req)
     AWSReqAll
         :: ( AWSPager req
            , Show req
            , Typeable req
            , Eq req
            )
-        => req -> AWSReq [(Rs req)]
+        => Maybe Region -> req -> AWSReq [Rs req]
 
 deriving instance Show (AWSReq res)
 
 instance Eq (AWSReq res) where
     r1 == r2 = case (r1, r2) of
-        (AWSReq r1', AWSReq r2') -> typedEQ r1' r2'
-        (AWSReqAll r1', AWSReqAll r2') -> typedEQ r1' r2'
+        (AWSReq reg1 r1', AWSReq reg2 r2') -> (reg1==reg2) && typedEQ r1' r2'
+        (AWSReqAll reg1 r1', AWSReqAll reg2 r2') -> (reg1==reg2) && typedEQ r1' r2'
         _ -> False
       where
         typedEQ r1' r2' =
@@ -58,8 +62,8 @@ instance Eq (AWSReq res) where
             in fromMaybe False m_eq
 
 instance Hashable (AWSReq res) where
-    hashWithSalt salt (AWSReq req)    = hashWithSalt salt (0::Int, show req, typeOf req)
-    hashWithSalt salt (AWSReqAll req) = hashWithSalt salt (1::Int, show req, typeOf req)
+    hashWithSalt salt (AWSReq reg req)    = hashWithSalt salt (0::Int, reg, show req, typeOf req)
+    hashWithSalt salt (AWSReqAll reg req) = hashWithSalt salt (1::Int, reg, show req, typeOf req)
 
 instance DataSourceName AWSReq where
     dataSourceName _ = "AWS"
@@ -75,8 +79,10 @@ instance DataSource u AWSReq where
         reqs <- forM blocked_fetches $ \(BlockedFetch aws_req result) ->
             async $ do
                 res <- E.try $ runResourceT $ runAWS aws_env $ case aws_req of
-                    AWSReq req -> send req
-                    AWSReqAll req -> paginate req $$ consume
+                    AWSReq Nothing req -> send req
+                    AWSReq (Just reg) req -> within reg $ send req
+                    AWSReqAll Nothing req -> paginate req $$ consume
+                    AWSReqAll (Just reg) req -> within reg $ paginate req $$ consume
                 liftIO $ putResult result res
         forM_ (reqs :: [Async ()]) link
         inner
@@ -97,7 +103,20 @@ fetchAWS
        , Haxl.Request AWSReq (Rs a)
        )
     => a -> GenHaxl u (Rs a)
-fetchAWS req = dataFetch (AWSReq req)
+fetchAWS req = dataFetch (AWSReq Nothing req)
+
+-- | Sends an 'AWSRequest' in a specific region.
+--
+-- The result will be cached. This should only be used for read-only access.
+fetchAWSIn
+    :: ( AWSRequest a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq (Rs a)
+       )
+    => Region -> a -> GenHaxl u (Rs a)
+fetchAWSIn region req = dataFetch (AWSReq (Just region) req)
 
 -- | Uncached version of 'fetchAWS'
 uncachedFetchAWS
@@ -108,7 +127,18 @@ uncachedFetchAWS
        , Haxl.Request AWSReq (Rs a)
        )
     => a -> GenHaxl u (Rs a)
-uncachedFetchAWS req = uncachedRequest (AWSReq req)
+uncachedFetchAWS req = uncachedRequest (AWSReq Nothing req)
+
+-- | Uncached version of 'fetchAWSIn'
+uncachedFetchAWSIn
+    :: ( AWSRequest a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq (Rs a)
+       )
+    => Region -> a -> GenHaxl u (Rs a)
+uncachedFetchAWSIn region req = uncachedRequest (AWSReq (Just region) req)
 
 -- | Sends requests necessary to fetch all result pages of a 'AWSRequest'
 --
@@ -118,10 +148,24 @@ fetchAllAWS
        , Show a
        , Typeable a
        , Eq a
-       , Haxl.Request AWSReq [(Rs a)]
+       , Haxl.Request AWSReq [Rs a]
        )
-    => a -> GenHaxl u [(Rs a)]
-fetchAllAWS req = dataFetch (AWSReqAll req)
+    => a -> GenHaxl u [Rs a]
+fetchAllAWS req = dataFetch (AWSReqAll Nothing req)
+
+-- | Sends requests necessary to fetch all result pages of a 'AWSRequest'
+-- in a specific region.
+--
+-- The result will be cached. This should only be used for read-only access.
+fetchAllAWSIn
+    :: ( AWSPager a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq [Rs a]
+       )
+    => Region -> a -> GenHaxl u [Rs a]
+fetchAllAWSIn region req = dataFetch (AWSReqAll (Just region) req)
 
 -- | Uncached version of 'fetchAllAWS'
 uncachedFetchAllAWS
@@ -129,7 +173,18 @@ uncachedFetchAllAWS
        , Show a
        , Typeable a
        , Eq a
-       , Haxl.Request AWSReq [(Rs a)]
+       , Haxl.Request AWSReq [Rs a]
        )
-    => a -> GenHaxl u [(Rs a)]
-uncachedFetchAllAWS req = uncachedRequest (AWSReqAll req)
+    => a -> GenHaxl u [Rs a]
+uncachedFetchAllAWS req = uncachedRequest (AWSReqAll Nothing req)
+
+-- | Uncached version of 'fetchAllAWSIn'
+uncachedFetchAllAWSIn
+    :: ( AWSPager a
+       , Show a
+       , Typeable a
+       , Eq a
+       , Haxl.Request AWSReq [Rs a]
+       )
+    => Region -> a -> GenHaxl u [Rs a]
+uncachedFetchAllAWSIn region req = uncachedRequest (AWSReqAll (Just region) req)
