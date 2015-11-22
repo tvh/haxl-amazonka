@@ -14,7 +14,7 @@ main = do
     res <- runHaxl env{flags = Flags 3 1} $ do
         buckets_response <- fetchAWS listBuckets
         let buckets = buckets_response ^. lbrsBuckets
-        flip traverse buckets $ \bucket -> do
+        for buckets $ \bucket -> do
             let name = bucket ^. bName
             location_response <- fetchAWS $ getBucketLocation name
             return (name, location_response ^. grsLocationConstraint)
