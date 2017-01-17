@@ -68,8 +68,8 @@ instance Hashable (AWSReq res) where
 instance DataSourceName AWSReq where
     dataSourceName _ = "AWS"
 
-instance Show1 AWSReq where
-    show1 = show
+instance ShowP AWSReq where
+    showp = show
 
 instance StateKey AWSReq where
     data State AWSReq = AWSState AWS.Env
